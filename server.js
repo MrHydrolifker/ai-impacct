@@ -2,19 +2,12 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import { GoogleGenAI } from "@google/genai";
-import fetch from "node-fetch";
 
 dotenv.config();
 
 const app = express();
 app.use(cors());
 app.use(express.json());
-
-/* ===============================
-   CONFIG
-================================ */
-const GUVI_ENDPOINT =
-  "https://hackathon.guvi.in/api/updateHoneyPotFinalResult";
 
 /* ===============================
    GEMINI INIT
@@ -58,44 +51,6 @@ function mergeIntel(oldI, newI) {
 }
 
 /* ===============================
-   GUVI FINAL CALLBACK
-================================ */
-async function sendFinalCallback(session) {
-  const payload = {
-    sessionId: session.sessionId,
-    scamDetected: session.scamDetected,
-    totalMessagesExchanged: session.history.length,
-    extractedIntelligence: {
-      bankAccounts: session.intelligence.bankAccounts || [],
-      upiIds: session.intelligence.upiIds || [],
-      phishingLinks: session.intelligence.phishingLinks || [],
-      phoneNumbers: session.intelligence.phoneNumbers || [],
-      suspiciousKeywords: session.intelligence.suspiciousKeywords || [],
-    },
-    agentNotes: session.agentNotes || "",
-  };
-
-  try {
-    // Using AbortController for timeout
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 5000);
-
-    await fetch(GUVI_ENDPOINT, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-      signal: controller.signal,
-    });
-
-    clearTimeout(timeout);
-    session.finalCallbackSent = true;
-    console.log(`✅ Final callback sent: ${session.sessionId}`);
-  } catch (err) {
-    console.error(`❌ Failed to send final callback: ${err.message}`);
-  }
-}
-
-/* ===============================
    MAIN ANALYZE ENDPOINT
 ================================ */
 app.post("/analyze", async (req, res) => {
@@ -106,8 +61,8 @@ app.post("/analyze", async (req, res) => {
       return res.status(400).json({ error: "Invalid request format" });
     }
 
+    // Initialize or retrieve session
     let session = sessions.get(sessionId);
-
     if (!session) {
       session = {
         sessionId,
@@ -121,7 +76,6 @@ app.post("/analyze", async (req, res) => {
           suspiciousKeywords: [],
         },
         agentNotes: "",
-        finalCallbackSent: false,
       };
       sessions.set(sessionId, session);
     }
@@ -165,11 +119,9 @@ ${JSON.stringify(session.history, null, 2)}
 
     const result = extractJSON(aiResponse.text);
 
+    // Update session intelligence and notes
     session.scamDetected ||= result.scamDetected;
-    session.intelligence = mergeIntel(
-      session.intelligence,
-      result.extractedIntelligence
-    );
+    session.intelligence = mergeIntel(session.intelligence, result.extractedIntelligence);
     session.agentNotes = result.agentNotes || "";
 
     // Add agent reply to history
@@ -180,19 +132,13 @@ ${JSON.stringify(session.history, null, 2)}
     });
 
     /* ===============================
-       FINAL CALLBACK LOGIC
-    ================================ */
-    if (session.scamDetected && !session.finalCallbackSent) {
-      await sendFinalCallback(session);
-    }
-
-    /* ===============================
        RESPONSE TO CLIENT
     ================================ */
     res.json({
       status: "success",
       reply: result.agentReply,
     });
+
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Internal server error" });
