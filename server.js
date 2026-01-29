@@ -49,13 +49,11 @@ function extractJSON(text) {
 
 function mergeIntel(oldI, newI) {
   return {
-    bankAccounts: [...new Set([...oldI.bankAccounts, ...newI.bankAccounts])],
-    upiIds: [...new Set([...oldI.upiIds, ...newI.upiIds])],
-    phishingLinks: [...new Set([...oldI.phishingLinks, ...newI.phishingLinks])],
-    phoneNumbers: [...new Set([...oldI.phoneNumbers, ...newI.phoneNumbers])],
-    suspiciousKeywords: [
-      ...new Set([...oldI.suspiciousKeywords, ...newI.suspiciousKeywords]),
-    ],
+    bankAccounts: [...new Set([...(oldI.bankAccounts || []), ...(newI.bankAccounts || [])])],
+    upiIds: [...new Set([...(oldI.upiIds || []), ...(newI.upiIds || [])])],
+    phishingLinks: [...new Set([...(oldI.phishingLinks || []), ...(newI.phishingLinks || [])])],
+    phoneNumbers: [...new Set([...(oldI.phoneNumbers || []), ...(newI.phoneNumbers || [])])],
+    suspiciousKeywords: [...new Set([...(oldI.suspiciousKeywords || []), ...(newI.suspiciousKeywords || [])])],
   };
 }
 
@@ -65,20 +63,31 @@ function mergeIntel(oldI, newI) {
 async function sendFinalCallback(session) {
   const payload = {
     sessionId: session.sessionId,
-    scamDetected: true,
+    scamDetected: session.scamDetected,
     totalMessagesExchanged: session.history.length,
-    extractedIntelligence: session.intelligence,
-    agentNotes: session.agentNotes,
+    extractedIntelligence: {
+      bankAccounts: session.intelligence.bankAccounts || [],
+      upiIds: session.intelligence.upiIds || [],
+      phishingLinks: session.intelligence.phishingLinks || [],
+      phoneNumbers: session.intelligence.phoneNumbers || [],
+      suspiciousKeywords: session.intelligence.suspiciousKeywords || [],
+    },
+    agentNotes: session.agentNotes || "",
   };
 
   try {
+    // Using AbortController for timeout
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+
     await fetch(GUVI_ENDPOINT, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
-      timeout: 5000,
+      signal: controller.signal,
     });
 
+    clearTimeout(timeout);
     session.finalCallbackSent = true;
     console.log(`✅ Final callback sent: ${session.sessionId}`);
   } catch (err) {
@@ -161,7 +170,7 @@ ${JSON.stringify(session.history, null, 2)}
       session.intelligence,
       result.extractedIntelligence
     );
-    session.agentNotes = result.agentNotes;
+    session.agentNotes = result.agentNotes || "";
 
     // Add agent reply to history
     session.history.push({
@@ -172,8 +181,6 @@ ${JSON.stringify(session.history, null, 2)}
 
     /* ===============================
        FINAL CALLBACK LOGIC
-       - Send immediately if scam detected
-       - Works for first message or multi-turn
     ================================ */
     if (session.scamDetected && !session.finalCallbackSent) {
       await sendFinalCallback(session);
